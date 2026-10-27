@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If you use this software or paper, please cite it as below."
+title: "MUSE-GM: Deterministic Genesis of the Origins of Gangsters"
+version: 0.1.0
+license: MIT
+repository-code: "https://github.com/ljrseals-dev/bang"
+authors:
+  - family-names: Seals
+    given-names: Lewis James
+    name-suffix: Jr.
+  - family-names: Seals
+    given-names: Laila Star

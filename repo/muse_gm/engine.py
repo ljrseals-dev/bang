@@ -392,7 +392,7 @@ def cmd_run(spec, a):
         manifest = {
             "schema_version": 1, "program": "muse-gm decision surface", "version": VERSION,
             "created_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
-            "command": sys.argv, "profile": a.profile, "weights": weights,
+            "command": ["muse-gm"] + sys.argv[1:], "profile": a.profile, "weights": weights,
             "combinations": spec.total, "full_space": spec.full_total, "selection": spec.selection_desc,
             "max_combinations": MAX_COMBINATIONS, "distinct": distinct,
             "variables_sha256": spec.variables_sha256, "rubric_sha256": spec.rubric_sha256,
