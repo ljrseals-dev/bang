@@ -2,7 +2,7 @@
 
 # MUSE-GM
 
-![HBO Styled Gangster Scene](images/gangster1.jpg )
+![HBO Styled Gangster Scene](images/gangster1.jpg)
 
 
 ### The Decision Surface for gangster cinema
