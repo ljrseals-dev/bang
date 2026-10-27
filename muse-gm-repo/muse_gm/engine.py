@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """MUSE-GM Decision Surface: exhaustive enumeration of a factorial story space.
 
-Variables (factors + value labels) live in config/variables.json, like an SPSS Variable View.
-Rubric tables, component formulas and weight profiles live in config/rubric.json.
+Variables (factors + value labels) live in data/variables.json, like an SPSS Variable View.
+Rubric tables, component formulas and weight profiles live in data/rubric.json.
 Every combination is scored; nothing is sampled. The rubric values are encoded judgments,
 not measured data, and every run manifest says so.
 """
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import datetime as dt
 import hashlib
@@ -60,8 +61,11 @@ class Spec:
     """Validated variables + rubric. Axis order of the surface is the order of variables."""
 
     def __init__(self, variables: dict, rubric: dict):
-        self.variables_sha256 = sha256_text(canonical(variables))
-        self.rubric_sha256 = sha256_text(canonical(rubric))
+        try:
+            self.variables_sha256 = sha256_text(canonical(variables))
+            self.rubric_sha256 = sha256_text(canonical(rubric))
+        except (ValueError, TypeError) as err:  # NaN/Infinity or non-JSON values
+            raise ConfigError(f"configuration is not valid JSON data: {err}") from err
         _only_keys(variables, ["schema_version", "variables"], "variables.json")
         self.names, self.var_labels, self.value_labels = [], {}, {}
         for v in variables["variables"]:
@@ -79,6 +83,9 @@ class Spec:
             raise ConfigError("a variable named 'effect' is required")
         self.shape = tuple(len(self.value_labels[n]) for n in self.names)
         self.total = int(np.prod(self.shape, dtype=object))
+        self.full_total = self.total
+        self.code_map = {n: list(range(1, len(self.value_labels[n]) + 1)) for n in self.names}
+        self.selection_desc = None
         if self.total > MAX_COMBINATIONS:
             raise ConfigError(f"{self.total:,} combinations exceeds the cap of {MAX_COMBINATIONS:,}")
 
@@ -117,8 +124,8 @@ class Spec:
     # ---- loading -------------------------------------------------------------------------
     @classmethod
     def load(cls, variables_path=None, rubric_path=None):
-        vp = Path(variables_path or HERE / "config" / "variables.json")
-        rp = Path(rubric_path or HERE / "config" / "rubric.json")
+        vp = Path(variables_path or HERE / "data" / "variables.json")
+        rp = Path(rubric_path or HERE / "data" / "rubric.json")
         return cls(json.loads(vp.read_text(encoding="utf-8")), json.loads(rp.read_text(encoding="utf-8")))
 
     # ---- computation ---------------------------------------------------------------------
@@ -163,7 +170,7 @@ class Spec:
             "rank": rank,
             "score": round(float(score), 6),
             "config": {n: self.value_labels[n][idx[n]] for n in self.names},
-            "codes": {n: idx[n] + 1 for n in self.names},
+            "codes": {n: self.code_map[n][idx[n]] for n in self.names},
             "components": {c: round(float(a[full]), 4) for c, a in comps.items()},
         }
 
@@ -230,6 +237,63 @@ class Spec:
         return report
 
 
+# ---- subspace selection (SPSS SELECT IF) ---------------------------------------------------
+def resolve_selection(variables, items):
+    """items like ['node=Harlem', 'era=3|4']. Values: a code number or a unique label substring."""
+    byname = {v["name"]: v for v in variables["variables"]}
+    sel = {}
+    for item in items:
+        if "=" not in item:
+            raise ConfigError(f"--select expects name=value, got {item!r}")
+        name, vals = item.split("=", 1)
+        if name not in byname:
+            raise ConfigError(f"--select: unknown variable {name!r}")
+        labels = list(byname[name]["values"].values())
+        picked = []
+        for tok in vals.split("|"):
+            tok = tok.strip()
+            if tok.isdigit() and 1 <= int(tok) <= len(labels):
+                picked.append(int(tok) - 1)
+                continue
+            hits = [i for i, l in enumerate(labels) if tok.lower() in l.lower()]
+            if len(hits) != 1:
+                raise ConfigError(f"--select {name}={tok!r}: matches {len(hits)} values (use the code number)")
+            picked.append(hits[0])
+        sel[name] = sorted(set(sel.get(name, []) + picked))
+    return sel
+
+
+def restrict(variables, rubric, sel):
+    nv, nr = copy.deepcopy(variables), copy.deepcopy(rubric)
+    for v in nv["variables"]:
+        if v["name"] in sel:
+            labs = [v["values"][str(i + 1)] for i in sel[v["name"]]]
+            v["values"] = {str(k + 1): l for k, l in enumerate(labs)}
+    for t in nr["tables"].values():
+        arr = np.array(t["values"], dtype=float)
+        for ax, a in enumerate(t["axes"]):
+            if a in sel:
+                arr = np.take(arr, sel[a], axis=ax)
+        t["values"] = arr.tolist()
+    return nv, nr
+
+
+def load_spec(a):
+    vp = Path(a.variables or HERE / "data" / "variables.json")
+    rp = Path(a.rubric or HERE / "data" / "rubric.json")
+    variables, rubric = json.loads(vp.read_text(encoding="utf-8")), json.loads(rp.read_text(encoding="utf-8"))
+    full = Spec(variables, rubric)
+    if not getattr(a, "select", None):
+        return full
+    sel = resolve_selection(variables, a.select)
+    spec = Spec(*restrict(variables, rubric, sel))
+    spec.variables_sha256, spec.rubric_sha256 = full.variables_sha256, full.rubric_sha256
+    spec.full_total = full.total
+    spec.code_map = {n: [i + 1 for i in sel.get(n, range(len(full.value_labels[n])))] for n in full.names}
+    spec.selection_desc = {n: [full.value_labels[n][i] for i in ix] for n, ix in sel.items()}
+    return spec
+
+
 # ---- reporting helpers -------------------------------------------------------------------
 def git_commit():
     try:
@@ -292,7 +356,9 @@ def cmd_variables(spec, a):
 
 def cmd_check(spec, a):
     print(f"OK  variables={len(spec.names)}  tables={len(spec.tables)}  components={len(spec.components)}  profiles={sorted(spec.profiles)}")
-    print(f"combinations: {spec.total:,} (cap {MAX_COMBINATIONS:,})  est. memory ~{spec.total * 8 * 8 / 1e6:,.0f} MB")
+    print(f"combinations: {spec.total:,} of full space {spec.full_total:,} (cap {MAX_COMBINATIONS:,})  est. memory ~{spec.total * 8 * 8 / 1e6:,.0f} MB")
+    if spec.selection_desc:
+        print("selection:", json.dumps(spec.selection_desc, ensure_ascii=False))
     print(f"variables sha256: {spec.variables_sha256}\nrubric sha256:    {spec.rubric_sha256}")
 
 
@@ -327,7 +393,8 @@ def cmd_run(spec, a):
             "schema_version": 1, "program": "muse-gm decision surface", "version": VERSION,
             "created_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
             "command": sys.argv, "profile": a.profile, "weights": weights,
-            "combinations": spec.total, "max_combinations": MAX_COMBINATIONS, "distinct": distinct,
+            "combinations": spec.total, "full_space": spec.full_total, "selection": spec.selection_desc,
+            "max_combinations": MAX_COMBINATIONS, "distinct": distinct,
             "variables_sha256": spec.variables_sha256, "rubric_sha256": spec.rubric_sha256,
             "git_commit": git_commit(), "python": sys.version.split()[0], "numpy": np.__version__,
             "platform": platform.platform(), "ties_at_first_place": ties, "evidence_status": EVIDENCE_STATUS,
@@ -344,20 +411,23 @@ def cmd_sensitivity(spec, a):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(prog="muse_gm", description=__doc__.split("\n")[0])
+    p = argparse.ArgumentParser(prog="muse-gm", description=__doc__.split("\n")[0])
     p.add_argument("--variables"); p.add_argument("--rubric")
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--select", action="append", default=[], metavar="VAR=VAL[|VAL]",
+                        help="restrict to a subspace (exhaustive within it); repeatable")
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("variables", help="SPSS-style Variable View"); s.add_argument("--values", action="store_true")
-    sub.add_parser("check", help="validate config and report size")
-    s = sub.add_parser("run", help="enumerate every combination and rank")
+    sub.add_parser("check", help="validate config and report size", parents=[common])
+    s = sub.add_parser("run", help="enumerate every combination and rank", parents=[common])
     s.add_argument("--profile", default="master"); s.add_argument("--effect", default="all")
     s.add_argument("--top", type=int, default=5); s.add_argument("--distinct", help="comma list, e.g. node,era,economy")
     s.add_argument("--out"); s.add_argument("--export-top", type=int, default=1000)
-    s = sub.add_parser("sensitivity", help="compare profiles and test weight shifts")
+    s = sub.add_parser("sensitivity", help="compare profiles and test weight shifts", parents=[common])
     s.add_argument("--profile", default="master"); s.add_argument("--against", default="equal"); s.add_argument("--top", type=int, default=5)
     a = p.parse_args(argv)
     try:
-        spec = Spec.load(a.variables, a.rubric)
+        spec = load_spec(a)
         {"variables": cmd_variables, "check": cmd_check, "run": cmd_run, "sensitivity": cmd_sensitivity}[a.cmd](spec, a)
     except ConfigError as err:
         print(f"CONFIG ERROR: {err}", file=sys.stderr)
