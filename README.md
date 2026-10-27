@@ -4,8 +4,6 @@
 
 ![HBO Styled Gangster Scene](images/gangster1.jpg)
 
-![Historical Street Scene](images/gangster2.jpg)
-
 
 ### The Decision Surface for gangster cinema
 
@@ -26,6 +24,8 @@ Fourteen diaspora nodes. Eight eras. Nine economies. Seven pressures. Five media
 Multiply them. That is the whole space of origins, and it is finite.
 
 MUSE-GM does not sample it. It **walks** it. Every combination is scored, ranked, hashed and exported to SPSS. Two weight profiles ship with it, sensitivity analysis is built in, and every run leaves a manifest you can reproduce to the sixth decimal.
+
+![Historical Street Scene](images/gangster2.jpg)
 
 > **Stratagem №1: don't sample the story. Exhaust it.**
 > Every screenwriter guesses. This one enumerates. Zero of the 4,445,280 possible origins are left to chance.
