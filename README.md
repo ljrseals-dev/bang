@@ -2,6 +2,11 @@
 
 # MUSE-GM
 
+![HBO Styled Gangster Scene](images/gangster1.jpg)
+
+![Historical Street Scene](images/gangster2.jpg)
+
+
 ### The Decision Surface for gangster cinema
 
 **4,445,280 origins. One instrument. No dice.**
